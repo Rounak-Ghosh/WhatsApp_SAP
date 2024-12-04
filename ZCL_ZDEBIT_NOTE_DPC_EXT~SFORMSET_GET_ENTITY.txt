@@ -1,0 +1,187 @@
+  METHOD sformset_get_entity.
+**TRY.
+*CALL METHOD SUPER->SFORMSET_GET_ENTITY
+*  EXPORTING
+*    IV_ENTITY_NAME          =
+*    IV_ENTITY_SET_NAME      =
+*    IV_SOURCE_NAME          =
+*    IT_KEY_TAB              =
+**    io_request_object       =
+**    io_tech_request_context =
+*    IT_NAVIGATION_PATH      =
+**  IMPORTING
+**    er_entity               =
+**    es_response_context     =
+*    .
+**  CATCH /iwbep/cx_mgw_busi_exception.
+**  CATCH /iwbep/cx_mgw_tech_exception.
+**ENDTRY.
+
+    DATA: input            TYPE string,
+          p_date           TYPE sydatum,
+          lv_gjahr         TYPE gjahr,
+          s_from           TYPE TABLE OF selopt,
+          w_from           TYPE selopt,
+          w_date           TYPE selopt,
+          i_date           TYPE TABLE OF selopt,
+          s_kunag          TYPE TABLE OF selopt,
+          w_kunag          TYPE selopt,
+          w_bukrs          TYPE selopt,
+          s_bukrs          TYPE TABLE OF selopt,
+          w_cnry           TYPE selopt,
+          s_cnry           TYPE TABLE OF selopt,
+          w_werks          TYPE selopt,
+          s_werks          TYPE TABLE OF selopt,
+          w_docno          TYPE selopt,
+          s_docno          TYPE TABLE OF selopt,
+          w_FYEAR          TYPE selopt,
+          s_FYEAR          TYPE TABLE OF selopt,
+          print_parameters TYPE pri_params,
+          valid_flag       TYPE char1,
+          gv_rqident       TYPE rspoid,
+          gv_spool_nr      TYPE tsp01-rqident,
+          gt_pdf_file      TYPE xstring,
+          n                TYPE string.
+
+    input = it_key_tab[ 1 ]-value.
+
+    IF strlen( input ) > 10.
+
+      w_from-sign = 'I'.
+      w_from-option = 'BT'.
+      w_from-low = input+0(8).
+      w_from-high = input+9(8).
+      APPEND w_from TO s_from.
+      w_kunag-low = input+18(8).
+      p_date = w_from-low.
+
+      CALL FUNCTION 'GET_CURRENT_YEAR'
+        EXPORTING
+          bukrs = 'R001'
+          date  = p_date                "Changed from sy-datum by ATC: Rounak Ghosh on 22.04.2024
+        IMPORTING
+          curry = lv_gjahr.
+
+      SELECT belnr
+              FROM acdoca
+              INTO TABLE @DATA(it_docnos)
+              WHERE rbukrs = 'R001'
+              AND gjahr = @lv_gjahr
+              AND blart IN ('DN', 'DG', 'DA', 'SA', 'DR')
+              AND kunnr EQ @w_kunag-low
+              AND budat IN @s_from.
+
+      SORT it_docnos BY belnr.
+      DELETE ADJACENT DUPLICATES FROM it_docnos COMPARING belnr.
+      IF it_docnos IS NOT INITIAL.
+        LOOP AT it_docnos INTO DATA(wa_docnos).
+          CONCATENATE wa_docnos-belnr ', ' er_entity-output INTO er_entity-output RESPECTING BLANKS.
+        ENDLOOP.
+        er_entity-output = substring( val = er_entity-output off = 0 len = strlen( er_entity-output ) - 2 ).
+      ELSE.
+        er_entity-output = 'NULL'.
+      ENDIF.
+
+      CONCATENATE w_from-low '_' w_from-high '_' w_kunag-low INTO er_entity-input.
+
+    ELSE.
+
+      w_date-sign = 'I'.
+      w_date-option = 'CP'.
+      CONCATENATE sy-datum '*' INTO w_date-low.
+      APPEND w_date TO i_date.
+
+      w_bukrs-sign = 'I'.
+      w_bukrs-option = 'EQ'.
+      w_bukrs-low = 'R001'.
+      APPEND w_bukrs TO s_bukrs.
+
+      SELECT SINGLE bupla
+        FROM bseg
+        INTO @DATA(lv_bupla)
+        WHERE belnr EQ @input.
+
+      SELECT SINGLE werks
+        FROM t001w
+        INTO @DATA(lv_werks)
+        WHERE j_1bbranch EQ @lv_bupla.
+
+      w_werks-sign = 'I'.
+      w_werks-option = 'EQ'.
+      w_werks-low = lv_werks.
+      APPEND w_werks TO s_werks.
+
+      w_docno-sign = 'I'.
+      w_docno-option = 'EQ'.
+      w_docno-low = input.
+      APPEND w_docno TO s_docno.
+
+      CALL FUNCTION 'GET_PRINT_PARAMETERS'
+        EXPORTING
+          copies                 = 1
+          destination            = 'LOCL'(015)
+          expiration             = 1
+          immediately            = ' '
+          new_list_id            = 'X'
+          no_dialog              = 'X'
+        IMPORTING
+          out_parameters         = print_parameters
+          valid                  = valid_flag
+        EXCEPTIONS
+          archive_info_not_found = 1
+          invalid_print_params   = 2
+          invalid_archive_params = 3
+          OTHERS                 = 4.
+
+      print_parameters-plist = 'ZWA_DEBIT'.
+
+      SUBMIT zfi_debit_new_format TO SAP-SPOOL
+              SPOOL PARAMETERS print_parameters
+              WITHOUT SPOOL DYNPRO
+              WITH ch1 EQ 'X'
+              WITH rb_cust EQ 'X'
+              WITH rb_vend EQ ''
+              WITH s_bukrs IN s_bukrs
+              WITH s_docno IN s_docno
+              WITH s_werks IN s_werks
+              AND RETURN.
+
+
+      WAIT UP TO 1 SECONDS.
+      SELECT MAX( rqident ) FROM tsp01 INTO gv_rqident
+        WHERE rqclient = sy-mandt
+          AND rqowner  = sy-uname
+          AND rqcretime IN i_date
+          AND rq2name EQ 'ZWA_DEBIT'.
+
+      gv_spool_nr = gv_rqident.
+
+      CALL FUNCTION 'CONVERT_ABAPSPOOLJOB_2_PDF'
+        EXPORTING
+          src_spoolid              = gv_spool_nr
+          no_dialog                = ' '
+          pdf_destination          = 'X'
+        IMPORTING
+          bin_file                 = gt_pdf_file
+        EXCEPTIONS
+          err_no_abap_spooljob     = 1
+          err_no_spooljob          = 2
+          err_no_permission        = 3
+          err_conv_not_possible    = 4
+          err_bad_destdevice       = 5
+          user_cancelled           = 6
+          err_spoolerror           = 7
+          err_temseerror           = 8
+          err_btcjob_open_failed   = 9
+          err_btcjob_submit_failed = 10
+          err_btcjob_close_failed  = 11
+          OTHERS                   = 12.
+      IF sy-subrc EQ 0.
+        er_entity-output = gt_pdf_file.
+      ENDIF.
+
+      er_entity-input = input.
+
+    ENDIF.
+
+  ENDMETHOD.

@@ -1,0 +1,202 @@
+  METHOD sformset_get_entity.
+**TRY.
+*CALL METHOD SUPER->SFORMSET_GET_ENTITY
+*  EXPORTING
+*    IV_ENTITY_NAME          =
+*    IV_ENTITY_SET_NAME      =
+*    IV_SOURCE_NAME          =
+*    IT_KEY_TAB              =
+**    io_request_object       =
+**    io_tech_request_context =
+*    IT_NAVIGATION_PATH      =
+**  IMPORTING
+**    er_entity               =
+**    es_response_context     =
+*    .
+**  CATCH /iwbep/cx_mgw_busi_exception.
+**  CATCH /iwbep/cx_mgw_tech_exception.
+**ENDTRY.
+
+    DATA: input            TYPE string,
+          invoice_no       TYPE string,
+          inv_no           TYPE vbrk-vbeln,
+          customer_no      TYPE vbrk-kunag,
+          gift_invno       TYPE string,
+          lv_kondm         TYPE vbrp-kondm,
+          print_parameters TYPE pri_params,
+          valid_flag       TYPE char1,
+          i_date           TYPE TABLE OF selopt,
+          w_date           TYPE selopt,
+          gv_rqident       TYPE rspoid,
+          gv_spool_nr      TYPE tsp01-rqident,
+          pdf_xstring      TYPE xstring,
+          w_vbeln          TYPE selopt,
+          s_vbeln          TYPE TABLE OF selopt,
+          w_belnr          TYPE selopt,
+          s_belnr          TYPE TABLE OF selopt,
+          w_gjahr          TYPE selopt,
+          s_gjahr          TYPE TABLE OF selopt,
+          w_plant          TYPE selopt,
+          s_plant          TYPE TABLE OF selopt.
+
+
+    input = it_key_tab[ 1 ]-value.
+
+    "   CUST NO      |      INVOICE NO
+    "D K N P 0 1 0 1 | 1  7  0  0  3  0  7  6  0
+    "D K N P 0 1 0 1 | 1  3  0  0  0  0  2  1  7
+    "D K N P 0 1 0 1 | T  R  5  1  0  0  0  0  0  0  4  7
+    "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+
+    SPLIT input AT '|' INTO customer_no invoice_no.
+
+    IF invoice_no+0(2) NE 'TR'.
+
+      inv_no = invoice_no.
+      inv_no = |{ inv_no ALPHA = IN }|.
+
+      SELECT SINGLE kunag
+        FROM vbrk
+        INTO @DATA(lv_kunnr)
+        WHERE vbeln = @inv_no.
+
+    ELSE.
+
+      SELECT belnr, gjahr                "Changed logic on 03.05.2024 by ATC: Rounak Ghosh
+        FROM bkpf
+        INTO TABLE @DATA(it_bkpf)
+        WHERE xblnr = @invoice_no.
+
+      SORT it_bkpf BY gjahr DESCENDING.   "Changed logic on 03.05.2024 by ATC: Rounak Ghosh
+      w_gjahr-sign = 'I'.
+      w_gjahr-option = 'EQ'.
+      w_gjahr-low = it_bkpf[ 1 ]-gjahr.
+      w_belnr-low = it_bkpf[ 1 ]-belnr.
+      APPEND w_gjahr to s_gjahr.
+
+*      SELECT SINGLE belnr
+*          FROM bkpf
+*          INTO w_belnr-low
+*          WHERE xblnr = invoice_no.
+
+*      SELECT SINGLE kunnr
+*        FROM bseg
+*        INTO lv_kunnr
+*        WHERE belnr = w_belnr-low
+*        AND lv_kunnr IS NOT INITIAL.
+
+      SELECT kunnr
+        FROM bseg
+        INTO TABLE @DATA(it_kunnr)
+        WHERE belnr = @w_belnr-low
+        AND gjahr = @w_gjahr-low.
+        DELETE it_kunnr WHERE kunnr IS INITIAL.
+        lv_kunnr = it_kunnr[ 1 ]-kunnr.
+
+      ENDIF.
+
+      IF lv_kunnr EQ customer_no.
+
+        w_date-sign = 'I'.
+        w_date-option = 'CP'.
+        CONCATENATE sy-datum '*' INTO w_date-low.
+        APPEND w_date TO i_date.
+
+        w_vbeln-sign = 'I'.
+        w_vbeln-option = 'EQ'.
+        w_vbeln-low = invoice_no.
+        APPEND w_vbeln TO s_vbeln.
+
+        CALL FUNCTION 'GET_PRINT_PARAMETERS'
+          EXPORTING
+            copies                 = 1
+            destination            = 'LOCL'(015)
+            expiration             = 1
+            immediately            = ' '
+            new_list_id            = 'X'
+            no_dialog              = 'X'
+          IMPORTING
+            out_parameters         = print_parameters
+            valid                  = valid_flag
+          EXCEPTIONS
+            archive_info_not_found = 1
+            invalid_print_params   = 2
+            invalid_archive_params = 3
+            OTHERS                 = 4.
+
+        print_parameters-plist = 'ZWA_DNINV'.
+
+
+        IF invoice_no+0(2) EQ 'TR'.
+
+          gift_invno = invoice_no.
+
+          SELECT SINGLE belnr
+            FROM bkpf
+            INTO w_belnr-low
+            WHERE xblnr = gift_invno
+            AND gjahr = w_gjahr-low.
+
+            w_belnr-sign = 'I'.
+            w_belnr-option = 'EQ'.
+            APPEND w_belnr TO s_belnr.
+
+            SUBMIT zinvoice_dwn_gift_whatsapp TO SAP-SPOOL        "TCODE:- ZSC_ISSUE_INVP -> GIFT
+                    SPOOL PARAMETERS print_parameters
+                    WITHOUT SPOOL DYNPRO
+                    WITH s_belnr IN s_belnr
+                    WITH s_gjahr IN s_gjahr                       "Changed logic on 03.05.2024 by ATC: Rounak Ghosh
+                    AND RETURN.
+
+          ELSE.
+            SELECT SINGLE werks, kondm
+              FROM vbrp
+              INTO ( @w_plant-low, @lv_kondm )
+              WHERE vbeln = @inv_no.
+
+              w_plant-sign = 'I'.
+              w_plant-option = 'EQ'.
+              APPEND w_plant TO s_plant.
+
+              IF lv_kondm EQ 'BR' OR lv_kondm EQ 'FT'.
+                SUBMIT zinvoice_dwn_brft_whatsapp TO SAP-SPOOL        "TCODE:- ZINVOICE -> BR_FT only
+                        SPOOL PARAMETERS print_parameters
+                        WITHOUT SPOOL DYNPRO
+                        WITH ch1 EQ 'X'
+                        WITH rb1 EQ 'X'
+                        WITH s_plant IN s_plant
+                        WITH s_vbeln IN s_vbeln
+                        AND RETURN.
+
+              ELSE.
+                SUBMIT zinvoice_download_whatsapp TO SAP-SPOOL       "TCODE:- ZINVOICE
+                       SPOOL PARAMETERS print_parameters
+                       WITHOUT SPOOL DYNPRO
+                       WITH ch1 EQ 'X'
+                       WITH ch5 EQ 'X'
+                       WITH k1 EQ 'X'
+                       WITH rb1 EQ 'X'
+                       WITH s_plant IN s_plant
+                       WITH s_vbeln IN s_vbeln
+                       AND RETURN.
+
+              ENDIF.
+
+            ENDIF.
+
+            IMPORT pdf_xstring = pdf_xstring FROM MEMORY ID 'ZZINV'.
+            CONCATENATE customer_no '_' invoice_no INTO er_entity-input.
+            IF pdf_xstring IS NOT INITIAL.
+              er_entity-output = pdf_xstring.
+            ELSE.
+              er_entity-output = 'NULL'.
+            ENDIF.
+
+          ELSE.
+
+            CONCATENATE customer_no '_' invoice_no INTO er_entity-input.
+            er_entity-output = 'NULL'.
+
+          ENDIF.
+
+        ENDMETHOD.
