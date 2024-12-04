@@ -1,0 +1,176 @@
+  METHOD custdetailsset_get_entity.
+TRY.
+CALL METHOD SUPER-CUSTDETAILSSET_GET_ENTITY
+  EXPORTING
+    IV_ENTITY_NAME          =
+    IV_ENTITY_SET_NAME      =
+    IV_SOURCE_NAME          =
+    IT_KEY_TAB              =
+    io_request_object       =
+    io_tech_request_context =
+    IT_NAVIGATION_PATH      =
+  IMPORTING
+    er_entity               =
+    es_response_context     =
+    .
+  CATCH iwbepcx_mgw_busi_exception.
+  CATCH iwbepcx_mgw_tech_exception.
+ENDTRY.
+
+ Objective This API is built for customer validation purpose
+ Date created  13.02.2024
+ Created By  Rounak Ghosh (ATC)
+
+
+    TYPES BEGIN OF ty_final,
+             telf1  TYPE kna1-telf1,
+             name1  TYPE kna1-name1,
+             kunnr  TYPE kna1-kunnr,
+             street TYPE adrc-street,
+             city1  TYPE adrc-city1,
+             region TYPE adrc-street,
+             gstin  TYPE dfkkbptaxnum-taxnum,
+           END OF ty_final.
+
+    DATA wa_final TYPE ty_final.
+
+    Reading the user input phone number
+    wa_final-telf1 = it_key_tab[ 1 ]-value.
+
+    Fetching data from database tables
+
+    SELECT SINGLE name1
+                  kunnr
+                  telf1
+      FROM kna1
+      INTO ( wa_final-name1, wa_final-kunnr, wa_final-telf1 )
+      WHERE telf1 = wa_final-telf1.      Checking via Mobile Number - TELF1 - 1st Priority
+
+    IF wa_final-kunnr IS INITIAL.
+      SELECT SINGLE name1
+                    kunnr
+                    telf2
+      FROM kna1
+      INTO ( wa_final-name1, wa_final-kunnr, wa_final-telf1 )
+      WHERE telf2 = wa_final-telf1.      Checking via Telephone Number - TELF2 - 2nd Priority
+    ENDIF.
+
+    SELECT SINGLE adrnr
+      FROM kna1
+      INTO @DATA(lv_adrnr)
+      WHERE telf1 = @wa_final-telf1.
+
+    SELECT SINGLE street
+                  city1
+                  region
+      FROM adrc
+      INTO ( wa_final-street, wa_final-city1, wa_final-region )
+      WHERE addrnumber = lv_adrnr.
+
+    CASE wa_final-region.
+      WHEN '01'.
+        wa_final-region = 'JAMMU AND KASHMIR'.
+      WHEN '02'.
+        wa_final-region = 'HIMACHAL PRADESH'.
+      WHEN '03'.
+        wa_final-region = 'PUNJAB'.
+      WHEN '04'.
+        wa_final-region = 'CHANDIGARH'.
+      WHEN '05'.
+        wa_final-region = 'UTTARAKHAND'.
+      WHEN '06'.
+        wa_final-region = 'HARYANA'.
+      WHEN '07'.
+        wa_final-region = 'DELHI'.
+      WHEN '08'.
+        wa_final-region = 'RAJASTHAN'.
+      WHEN '09'.
+        wa_final-region = 'UTTAR PRADESH'.
+      WHEN '10'.
+        wa_final-region = 'BIHAR'.
+      WHEN '11'.
+        wa_final-region = 'SIKKIM'.
+      WHEN '12'.
+        wa_final-region = 'ARUNACHAL PRADESH'.
+      WHEN '13'.
+        wa_final-region = 'NAGALAND'.
+      WHEN '14'.
+        wa_final-region = 'MANIPUR'.
+      WHEN '15'.
+        wa_final-region = 'MIZORAM'.
+      WHEN '16'.
+        wa_final-region = 'TRIPURA'.
+      WHEN '17'.
+        wa_final-region = 'MEGALAYA'.
+      WHEN '18'.
+        wa_final-region = 'ASSAM'.
+      WHEN '19'.
+        wa_final-region = 'WEST BENGAL'.
+      WHEN '20'.
+        wa_final-region = 'JHARKHAND'.
+      WHEN '21'.
+        wa_final-region = 'ODISHA'.
+      WHEN '22'.
+        wa_final-region = 'CHHATISGARH'.
+      WHEN '23'.
+        wa_final-region = 'MADHYA PRADESH'.
+      WHEN '24'.
+        wa_final-region = 'GUJARAT'.
+      WHEN '25'.
+        wa_final-region = 'DAMAN UND DIU'.
+      WHEN '26'.
+        wa_final-region = 'DADRA UND NAGAR HAV.'.
+      WHEN '27'.
+        wa_final-region = 'MAHARASHTRA'.
+      WHEN '29'.
+        wa_final-region = 'KARNATAKA'.
+      WHEN '30'.
+        wa_final-region = 'GOA'.
+      WHEN '31'.
+        wa_final-region = 'LAKSHADWEEP'.
+      WHEN '32'.
+        wa_final-region = 'KERALA'.
+      WHEN '33'.
+        wa_final-region = 'TAMIL NADU'.
+      WHEN '34'.
+        wa_final-region = 'PONDICHERRY'.
+      WHEN '35'.
+        wa_final-region = 'ANDAMAN AND NICO.IN.'.
+      WHEN '36'.
+        wa_final-region = 'TELANGANA'.
+      WHEN '37'.
+        wa_final-region = 'ANDHRA PRADESH'.
+      WHEN '38'.
+        wa_final-region = 'LADAKH'.
+      WHEN '97'.
+        wa_final-region = 'OTHER TERRITORY'.
+      WHEN '99'.
+        wa_final-region = 'NEPAL'.
+    ENDCASE.
+
+    SELECT SINGLE taxnum
+      FROM dfkkbptaxnum
+      INTO wa_final-gstin
+      WHERE partner = wa_final-kunnr.
+
+
+    Populating er_entity as the final structure that the API throws as response
+    IF wa_final-kunnr IS NOT INITIAL.
+      er_entity-address = wa_final-street.
+      er_entity-city = wa_final-city1.
+      er_entity-state = wa_final-region.
+      er_entity-phone_no = wa_final-telf1.
+      er_entity-name = wa_final-name1.
+      er_entity-kunnr = wa_final-kunnr.
+      er_entity-gst_no = wa_final-gstin.
+    ELSE.
+      er_entity-address   = 'NULL'.
+      er_entity-city      = 'NULL'.
+      er_entity-state     = 'NULL'.
+      er_entity-phone_no  = 'NULL'.
+      er_entity-name      = 'NULL'.
+      er_entity-kunnr     = 'NULL'.
+      er_entity-gst_no    = 'NULL'.
+    ENDIF.
+
+  ENDMETHOD.
